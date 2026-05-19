@@ -207,6 +207,8 @@ async fn handle_specific_webhook(
         "splice" => "https://staging.webhook.api.mavapay.co/webhook/splice",
         "useorange" => "https://staging.webhook.api.mavapay.co/webhook/useorange",
         "galoy" => "https://staging.webhook.api.mavapay.co/webhook/galoy",
+        "ibex"=> "https://staging.webhook.api.mavapay.co/webhook/ibex",
+        "nomba" => "https://staging.webhook.api.mavapay.co/webhook/nomba",
         _ => return HttpResponse::NotFound().finish(),
     };
 
