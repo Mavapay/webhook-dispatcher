@@ -372,13 +372,13 @@ fn load_endpoints() -> Vec<WebhookEndpoint> {
             is_active: true,
         },
         WebhookEndpoint {
-            id: "galoy".to_string(),
+            id: "ibex".to_string(),
             url: "https://staging.webhook.api.mavapay.co/webhook/ibex".to_string(),
             name: "Ibex Staging".to_string(),
             is_active: true,
         },
         WebhookEndpoint {
-            id: "galoy".to_string(),
+            id: "nomba".to_string(),
             url: "https://staging.webhook.api.mavapay.co/webhook/nomba".to_string(),
             name: "Nomba Staging".to_string(),
             is_active: true,
