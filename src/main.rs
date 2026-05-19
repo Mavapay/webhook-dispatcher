@@ -3,12 +3,22 @@ use actix_files;
 use actix_web::rt;
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
 use futures::future;
-use reqwest; // Using reqwest instead of awc for better thread safety
+use reqwest;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::RwLock;
+
+fn data_dir() -> PathBuf {
+    let dir = env::var("DATA_DIR").unwrap_or_else(|_| "/data".to_string());
+    PathBuf::from(dir)
+}
+
+fn endpoints_path() -> PathBuf {
+    data_dir().join("endpoints.json")
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct WebhookEvent {
@@ -329,13 +339,15 @@ fn save_endpoints(endpoints: &[WebhookEndpoint]) -> Result<(), String> {
     let json = serde_json::to_string_pretty(endpoints)
         .map_err(|e| format!("Failed to serialize endpoints: {}", e))?;
 
-    fs::write("endpoints.json", json).map_err(|e| format!("Failed to write endpoints file: {}", e))
+    let path = endpoints_path();
+    fs::write(&path, json).map_err(|e| format!("Failed to write endpoints file: {}", e))
 }
 
 // Load endpoints from a JSON file
 fn load_endpoints() -> Vec<WebhookEndpoint> {
-    if Path::new("endpoints.json").exists() {
-        match fs::read_to_string("endpoints.json") {
+    let path = endpoints_path();
+    if path.exists() {
+        match fs::read_to_string(&path) {
             Ok(contents) => match serde_json::from_str::<Vec<WebhookEndpoint>>(&contents) {
                 Ok(endpoints) => {
                     println!("Loaded {} endpoints from file", endpoints.len());

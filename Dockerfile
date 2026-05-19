@@ -12,5 +12,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/webhook-forwarder .
 COPY static ./static
+RUN mkdir -p /data
+ENV DATA_DIR=/data
 EXPOSE 8080
 CMD ["./webhook-forwarder"]
