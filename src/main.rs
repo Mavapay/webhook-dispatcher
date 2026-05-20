@@ -3,6 +3,7 @@ use actix_files;
 use actix_web::rt;
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
 use futures::future;
+use log::{info, warn, error, debug};
 use reqwest;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -61,16 +62,19 @@ async fn register_endpoint(
     endpoint_req: web::Json<CreateWebhookRequest>,
     data: web::Data<AppState>,
 ) -> HttpResponse {
-    // Validate URL
+    info!("POST /endpoints - Register endpoint request: name={}, url={}, is_active={}", endpoint_req.name, endpoint_req.url, endpoint_req.is_active);
+    debug!("Register endpoint payload: {:?}", endpoint_req);
+
     if let Err(e) = url::Url::parse(&endpoint_req.url) {
+        warn!("Invalid URL format: {} - {}", endpoint_req.url, e);
         return HttpResponse::BadRequest().json(serde_json::json!({
             "error": "Invalid URL format",
             "details": e.to_string()
         }));
     }
 
-    // Validate name
     if endpoint_req.name.trim().is_empty() {
+        warn!("Empty name provided for endpoint registration");
         return HttpResponse::BadRequest().json(serde_json::json!({
             "error": "Name cannot be empty"
         }));
@@ -85,10 +89,10 @@ async fn register_endpoint(
 
     let mut endpoints = data.endpoints.write().unwrap();
     endpoints.push(new_endpoint.clone());
+    info!("Registered new endpoint: id={}, name={}, url={}", new_endpoint.id, new_endpoint.name, new_endpoint.url);
 
-    // Save updated endpoints to persistent storage
     if let Err(e) = save_endpoints(&endpoints) {
-        println!("Error saving endpoints: {}", e);
+        error!("Error saving endpoints: {}", e);
     }
 
     HttpResponse::Ok().json(endpoints.clone())
@@ -97,6 +101,8 @@ async fn register_endpoint(
 // Endpoint to list all registered webhooks
 async fn list_endpoints(data: web::Data<AppState>) -> HttpResponse {
     let endpoints = data.endpoints.read().unwrap();
+    info!("GET /endpoints - Listing {} endpoints", endpoints.len());
+    debug!("Endpoints: {:?}", endpoints);
     HttpResponse::Ok().json(endpoints.clone())
 }
 
@@ -107,21 +113,24 @@ async fn update_endpoint(
     data: web::Data<AppState>,
 ) -> HttpResponse {
     let id = path.into_inner();
+    info!("PUT /endpoints/{}/status - Update endpoint request: is_active={}", id, update.is_active);
+    debug!("Update payload: {:?}", update);
+
     let mut endpoints = data.endpoints.write().unwrap();
 
     if let Some(endpoint) = endpoints.iter_mut().find(|e| e.id == id) {
         endpoint.is_active = update.is_active;
+        info!("Updated endpoint: id={}, name={}, is_active={}", endpoint.id, endpoint.name, endpoint.is_active);
 
-        // Clone endpoint for response
         let endpoint_clone = endpoint.clone();
 
-        // Save the updated endpoints
         if let Err(e) = save_endpoints(&endpoints) {
-            println!("Error saving endpoints: {}", e);
+            error!("Error saving endpoints: {}", e);
         }
 
         HttpResponse::Ok().json(endpoint_clone)
     } else {
+        warn!("Endpoint not found for update: id={}", id);
         HttpResponse::NotFound().finish()
     }
 }
@@ -132,17 +141,20 @@ async fn delete_endpoint(
     data: web::Data<AppState>,
 ) -> HttpResponse {
     let id = endpoint_id.into_inner();
+    info!("DELETE /endpoints/{} - Delete endpoint request", id);
+
     let mut endpoints = data.endpoints.write().unwrap();
     if let Some(pos) = endpoints.iter().position(|e| e.id == id) {
-        endpoints.remove(pos);
+        let removed = endpoints.remove(pos);
+        info!("Deleted endpoint: id={}, name={}", removed.id, removed.name);
 
-        // Save the updated endpoints
         if let Err(e) = save_endpoints(&endpoints) {
-            println!("Error saving endpoints: {}", e);
+            error!("Error saving endpoints: {}", e);
         }
 
         HttpResponse::Ok().json(endpoints.clone())
     } else {
+        warn!("Endpoint not found for deletion: id={}", id);
         HttpResponse::NotFound().finish()
     }
 }
@@ -153,29 +165,26 @@ async fn forward_webhook(
     endpoint: &WebhookEndpoint,
     payload: &WebhookEvent,
 ) -> Result<(), String> {
-    // Create a custom client that doesn't add a Host header automatically
+    info!("Forwarding webhook to endpoint: name={}, url={}", endpoint.name, endpoint.url);
+    debug!("Forward payload: {:?}", payload);
+
     let mut request_builder = client.post(&endpoint.url).json(&payload.payload);
 
-    // Get the URL hostname to set as Host header
     let url = url::Url::parse(&endpoint.url).map_err(|e| format!("Failed to parse URL: {}", e))?;
 
     let host = url
         .host_str()
         .ok_or_else(|| "URL has no host".to_string())?;
 
-    // Add the host's port to the Host header if present
     let host_header = if let Some(port) = url.port() {
         format!("{}:{}", host, port)
     } else {
         host.to_string()
     };
 
-    // Set the proper Host header for the target URL
     request_builder = request_builder.header("Host", host_header);
 
-    // Forward selected original headers, but skip the Host header
     for (header_name, header_value) in &payload.headers {
-        // Skip the original Host header to avoid misdirected request errors
         if header_name.to_lowercase() != "host" {
             request_builder = request_builder.header(header_name, header_value);
         }
@@ -188,16 +197,14 @@ async fn forward_webhook(
 
     let status = response.status();
     if status.is_success() {
-        println!(
-            "Successfully forwarded to {}: status {}",
-            endpoint.name, status
-        );
+        info!("Successfully forwarded to {}: status {}", endpoint.name, status);
         Ok(())
     } else {
         let error_body = response
             .text()
             .await
             .unwrap_or_else(|_| "Unable to read error response".to_string());
+        error!("Endpoint {} returned error status {}: {}", endpoint.name, status, error_body);
         Err(format!(
             "Endpoint returned error status {}: {}",
             status, error_body
@@ -212,6 +219,9 @@ async fn handle_specific_webhook(
     req: HttpRequest,
 ) -> HttpResponse {
     let service = path.into_inner();
+    info!("POST /webhook/{} - Received specific webhook", service);
+    debug!("Specific webhook payload: {:?}", payload);
+
     let destination_url = match service.as_str() {
         "fincra" => "https://staging.webhook.api.mavapay.co/webhook/fincra",
         "splice" => "https://staging.webhook.api.mavapay.co/webhook/splice",
@@ -219,10 +229,14 @@ async fn handle_specific_webhook(
         "galoy" => "https://staging.webhook.api.mavapay.co/webhook/galoy",
         "ibex"=> "https://staging.webhook.api.mavapay.co/webhook/ibex",
         "nomba" => "https://staging.webhook.api.mavapay.co/webhook/nomba",
-        _ => return HttpResponse::NotFound().finish(),
+        _ => {
+            warn!("Unknown service requested: {}", service);
+            return HttpResponse::NotFound().finish();
+        }
     };
 
-    // Capture all headers from the original request
+    info!("Routing {} webhook to {}", service, destination_url);
+
     let mut headers = HashMap::new();
     for (header_name, header_value) in req.headers() {
         if let Ok(value_str) = header_value.to_str() {
@@ -230,13 +244,11 @@ async fn handle_specific_webhook(
         }
     }
 
-    // Create WebhookEvent with the payload and headers
     let webhook_event = WebhookEvent {
         payload: payload.into_inner(),
         headers,
     };
 
-    // Forward the webhook asynchronously
     rt::spawn(async move {
         let client = reqwest::Client::new();
         let endpoint = WebhookEndpoint {
@@ -247,7 +259,7 @@ async fn handle_specific_webhook(
         };
 
         if let Err(error) = forward_webhook(&client, &endpoint, &webhook_event).await {
-            println!("Error forwarding to {}: {}", service, error);
+            error!("Error forwarding to {}: {}", service, error);
         }
     });
 
@@ -263,7 +275,9 @@ async fn receive_webhook(
     req: HttpRequest,
     data: web::Data<AppState>,
 ) -> HttpResponse {
-    // Capture all headers from the original request
+    info!("POST /webhook - Received webhook");
+    debug!("Webhook payload: {:?}", payload);
+
     let mut headers = HashMap::new();
     for (header_name, header_value) in req.headers() {
         if let Ok(value_str) = header_value.to_str() {
@@ -271,7 +285,6 @@ async fn receive_webhook(
         }
     }
 
-    // Create WebhookEvent with the payload and headers
     let webhook_event = WebhookEvent {
         payload: payload.into_inner(),
         headers,
@@ -282,32 +295,32 @@ async fn receive_webhook(
         endpoints.iter().filter(|e| e.is_active).cloned().collect();
 
     if active_endpoints.is_empty() {
+        warn!("No active endpoints configured for webhook forwarding");
         return HttpResponse::Ok().json(serde_json::json!({
             "status": "no_active_endpoints",
             "message": "No active endpoints configured"
         }));
     }
 
-    // Clone the webhook event for async processing
+    info!("Forwarding webhook to {} active endpoint(s)", active_endpoints.len());
+
     let webhook_event_clone = webhook_event.clone();
 
-    // Spawn a new task to process the webhook asynchronously
     rt::spawn(async move {
         let client = reqwest::Client::builder()
-            .danger_accept_invalid_certs(true) // For testing to accept self-signed certs
+            .danger_accept_invalid_certs(true)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
-        // Process all endpoints concurrently using join_all
         let futures: Vec<_> = active_endpoints
-            .into_iter() // Use into_iter() to take ownership
+            .into_iter()
             .map(|endpoint| {
-                let client = client.clone(); // Clone the client for each future
-                let payload = webhook_event_clone.clone(); // Clone the payload for each future
+                let client = client.clone();
+                let payload = webhook_event_clone.clone();
 
                 async move {
                     if let Err(error) = forward_webhook(&client, &endpoint, &payload).await {
-                        println!("Error forwarding to {}: {}", endpoint.name, error);
+                        error!("Error forwarding to {}: {}", endpoint.name, error);
                         (endpoint.name, error)
                     } else {
                         (endpoint.name, "Success".to_string())
@@ -316,18 +329,17 @@ async fn receive_webhook(
             })
             .collect();
 
-        // Wait for all forwarding attempts to complete
         let results = future::join_all(futures).await;
 
-        // Log results
         for (endpoint_name, result) in results {
             if result != "Success" {
-                println!("  {}: {}", endpoint_name, result);
+                error!("  {}: {}", endpoint_name, result);
+            } else {
+                info!("  {}: {}", endpoint_name, result);
             }
         }
     });
 
-    // Immediately return success response
     HttpResponse::Ok().json(serde_json::json!({
         "status": "accepted",
         "message": "Webhook received and processing started"
@@ -350,12 +362,12 @@ fn load_endpoints() -> Vec<WebhookEndpoint> {
         match fs::read_to_string(&path) {
             Ok(contents) => match serde_json::from_str::<Vec<WebhookEndpoint>>(&contents) {
                 Ok(endpoints) => {
-                    println!("Loaded {} endpoints from file", endpoints.len());
+                    info!("Loaded {} endpoints from file", endpoints.len());
                     return endpoints;
                 }
-                Err(e) => println!("Error parsing endpoints file: {}", e),
+                Err(e) => error!("Error parsing endpoints file: {}", e),
             },
-            Err(e) => println!("Error reading endpoints file: {}", e),
+            Err(e) => error!("Error reading endpoints file: {}", e),
         }
     }
 
@@ -401,7 +413,7 @@ fn load_endpoints() -> Vec<WebhookEndpoint> {
 
     // Save the default endpoints
     if let Err(e) = save_endpoints(&default_endpoints) {
-        println!("Error saving default endpoints: {}", e);
+        error!("Error saving default endpoints: {}", e);
     }
 
     default_endpoints
@@ -409,10 +421,13 @@ fn load_endpoints() -> Vec<WebhookEndpoint> {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .init();
+
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
     let bind_address = format!("0.0.0.0:{}", port);
 
-    println!("Starting webhook relay server on {}", bind_address);
+    info!("Starting webhook relay server on {}", bind_address);
 
     // Load endpoints from persistent storage
     let endpoints = load_endpoints();
