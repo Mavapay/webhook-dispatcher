@@ -1,7 +1,8 @@
 // Update webhook URL in the info section
 function updateWebhookUrl() {
   const serverUrl = window.location.origin;
-  document.getElementById("webhookUrl").textContent = `${serverUrl}/webhook`;
+  document.getElementById("webhookUrl").textContent = `${serverUrl}/webhook/{source}`;
+  document.getElementById("webhookSourceUrl").textContent = `${serverUrl}/webhook/fincra`;
 }
 
 // Load endpoints from server
@@ -24,10 +25,15 @@ function displayEndpoints(endpoints) {
   endpoints.forEach((endpoint) => {
     const div = document.createElement("div");
     div.className = "endpoint-item";
+    const sourceLabel = endpoint.source
+      ? `<span class="endpoint-source">Source: ${escapeHtml(endpoint.source)}</span>`
+      : `<span class="endpoint-source endpoint-source-all">Source: All</span>`;
+
     div.innerHTML = `
             <div class="endpoint-info">
                 <div class="endpoint-name">${escapeHtml(endpoint.name)}</div>
                 <div class="endpoint-url">${escapeHtml(endpoint.url)}</div>
+                ${sourceLabel}
             </div>
             <div class="endpoint-controls">
                 <label class="toggle-switch">
@@ -47,8 +53,10 @@ function displayEndpoints(endpoints) {
 async function addEndpoint() {
   const urlInput = document.getElementById("webhookUrl");
   const nameInput = document.getElementById("webhookName");
+  const sourceInput = document.getElementById("webhookSource");
   const url = urlInput.value.trim();
   const name = nameInput.value.trim();
+  const source = sourceInput.value.trim();
 
   if (!url || !name) {
     showNotification("Please fill in all fields", "error");
@@ -65,6 +73,7 @@ async function addEndpoint() {
         url,
         name,
         is_active: false,
+        source: source || undefined,
       }),
     });
 
@@ -77,6 +86,7 @@ async function addEndpoint() {
     displayEndpoints(endpoints);
     urlInput.value = "";
     nameInput.value = "";
+    sourceInput.value = "";
     showNotification("Endpoint added successfully", "success");
   } catch (error) {
     console.error("Error adding endpoint:", error);

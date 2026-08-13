@@ -23,6 +23,11 @@
                         id="webhookName"
                         placeholder="Enter a name for this endpoint"
                     />
+                    <input
+                        type="text"
+                        id="webhookSource"
+                        placeholder="Enter source (e.g., fincra, splice) or leave empty for all"
+                    />
                     <button onclick="addEndpoint()">Add Endpoint</button>
                 </div>
             </div>
@@ -36,9 +41,11 @@
 
             <div class="webhook-info">
                 <h2>Webhook Information</h2>
-                <p>Send your webhooks to: <code id="webhookUrl"></code></p>
+                <p>Send source-specific webhooks to: <code id="webhookUrl"></code></p>
+                <p>Or target a specific source: <code id="webhookSourceUrl"></code></p>
                 <pre class="code-block">
-curl -X POST https://webhook-origin.com/webhook \
+# Send to a specific source (recommended):
+curl -X POST https://webhook-origin.com/webhook/fincra \
 -H "Content-Type: application/json" \
 -d '{"event": "test", "data": "your payload here"}'</pre
                 >

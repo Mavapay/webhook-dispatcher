@@ -102,6 +102,22 @@ button.delete:hover {
     font-size: 14px;
 }
 
+.endpoint-source {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    background-color: #e3f2fd;
+    color: #1565c0;
+}
+
+.endpoint-source-all {
+    background-color: #fff3e0;
+    color: #e65100;
+}
+
 .endpoint-controls {
     display: flex;
     gap: 10px;

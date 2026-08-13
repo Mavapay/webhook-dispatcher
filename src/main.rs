@@ -37,6 +37,8 @@ struct WebhookEndpoint {
     name: String,
     #[serde(default)]
     is_active: bool,
+    #[serde(default)]
+    source: Option<String>,
 }
 
 // Add this new struct for the registration request
@@ -46,6 +48,8 @@ struct CreateWebhookRequest {
     name: String,
     #[serde(default)]
     is_active: bool,
+    #[serde(default)]
+    source: Option<String>,
 }
 
 struct AppState {
@@ -80,11 +84,18 @@ async fn register_endpoint(
         }));
     }
 
+    let source = endpoint_req
+        .source
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .cloned();
+
     let new_endpoint = WebhookEndpoint {
         id: uuid::Uuid::new_v4().to_string(),
         url: endpoint_req.url.clone(),
         name: endpoint_req.name.clone(),
         is_active: endpoint_req.is_active,
+        source,
     };
 
     let mut endpoints = data.endpoints.write().unwrap();
@@ -212,30 +223,15 @@ async fn forward_webhook(
     }
 }
 
-// New function to handle specific webhook paths
+// Endpoint to handle source-specific webhooks
 async fn handle_specific_webhook(
     path: web::Path<String>,
     payload: web::Json<serde_json::Value>,
     req: HttpRequest,
+    data: web::Data<AppState>,
 ) -> HttpResponse {
     let service = path.into_inner();
-    info!("POST /webhook/{} - Received specific webhook", service);
-    debug!("Specific webhook payload: {:?}", payload);
-
-    let destination_url = match service.as_str() {
-        "fincra" => "https://staging.webhook.api.mavapay.co/webhook/fincra",
-        "splice" => "https://staging.webhook.api.mavapay.co/webhook/splice",
-        "useorange" => "https://staging.webhook.api.mavapay.co/webhook/useorange",
-        "galoy" => "https://staging.webhook.api.mavapay.co/webhook/galoy",
-        "ibex"=> "https://staging.webhook.api.mavapay.co/webhook/ibex",
-        "nomba" => "https://staging.webhook.api.mavapay.co/webhook/nomba",
-        _ => {
-            warn!("Unknown service requested: {}", service);
-            return HttpResponse::NotFound().finish();
-        }
-    };
-
-    info!("Routing {} webhook to {}", service, destination_url);
+    info!("POST /webhook/{} - Received webhook for source", service);
 
     let mut headers = HashMap::new();
     for (header_name, header_value) in req.headers() {
@@ -249,17 +245,60 @@ async fn handle_specific_webhook(
         headers,
     };
 
-    rt::spawn(async move {
-        let client = reqwest::Client::new();
-        let endpoint = WebhookEndpoint {
-            id: service.clone(),
-            url: destination_url.to_string(),
-            name: format!("Static {} endpoint", service),
-            is_active: true,
-        };
+    let endpoints = data.endpoints.read().unwrap();
+    let matching: Vec<WebhookEndpoint> = endpoints
+        .iter()
+        .filter(|e| e.is_active && e.source.as_deref() == Some(&service))
+        .cloned()
+        .collect();
 
-        if let Err(error) = forward_webhook(&client, &endpoint, &webhook_event).await {
-            error!("Error forwarding to {}: {}", service, error);
+    if matching.is_empty() {
+        warn!("No active endpoints found for source: {}", service);
+        return HttpResponse::Ok().json(serde_json::json!({
+            "status": "no_active_endpoints",
+            "message": format!("No active endpoints configured for source: {}", service)
+        }));
+    }
+
+    info!(
+        "Forwarding webhook for source '{}' to {} endpoint(s)",
+        service,
+        matching.len()
+    );
+
+    let webhook_event_clone = webhook_event.clone();
+
+    rt::spawn(async move {
+        let client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        let futures: Vec<_> = matching
+            .into_iter()
+            .map(|endpoint| {
+                let client = client.clone();
+                let payload = webhook_event_clone.clone();
+
+                async move {
+                    if let Err(error) = forward_webhook(&client, &endpoint, &payload).await {
+                        error!("Error forwarding to {}: {}", endpoint.name, error);
+                        (endpoint.name, error)
+                    } else {
+                        (endpoint.name, "Success".to_string())
+                    }
+                }
+            })
+            .collect();
+
+        let results = future::join_all(futures).await;
+
+        for (endpoint_name, result) in results {
+            if result != "Success" {
+                error!("  {}: {}", endpoint_name, result);
+            } else {
+                info!("  {}: {}", endpoint_name, result);
+            }
         }
     });
 
@@ -291,18 +330,24 @@ async fn receive_webhook(
     };
 
     let endpoints = data.endpoints.read().unwrap();
-    let active_endpoints: Vec<WebhookEndpoint> =
-        endpoints.iter().filter(|e| e.is_active).cloned().collect();
+    let active_endpoints: Vec<WebhookEndpoint> = endpoints
+        .iter()
+        .filter(|e| e.is_active && e.source.is_none())
+        .cloned()
+        .collect();
 
     if active_endpoints.is_empty() {
-        warn!("No active endpoints configured for webhook forwarding");
+        warn!("No active catch-all endpoints configured for webhook forwarding");
         return HttpResponse::Ok().json(serde_json::json!({
             "status": "no_active_endpoints",
-            "message": "No active endpoints configured"
+            "message": "No active catch-all endpoints configured"
         }));
     }
 
-    info!("Forwarding webhook to {} active endpoint(s)", active_endpoints.len());
+    info!(
+        "Forwarding webhook to {} catch-all endpoint(s)",
+        active_endpoints.len()
+    );
 
     let webhook_event_clone = webhook_event.clone();
 
@@ -378,36 +423,42 @@ fn load_endpoints() -> Vec<WebhookEndpoint> {
             url: "https://staging.webhook.api.mavapay.co/webhook/fincra".to_string(),
             name: "Fincra Staging".to_string(),
             is_active: true,
+            source: Some("fincra".to_string()),
         },
         WebhookEndpoint {
             id: "splice".to_string(),
             url: "https://staging.webhook.api.mavapay.co/webhook/splice".to_string(),
             name: "Splice Staging".to_string(),
             is_active: true,
+            source: Some("splice".to_string()),
         },
         WebhookEndpoint {
             id: "useorange".to_string(),
             url: "https://staging.webhook.api.mavapay.co/webhook/useorange".to_string(),
             name: "UseOrange Staging".to_string(),
             is_active: true,
+            source: Some("useorange".to_string()),
         },
         WebhookEndpoint {
             id: "galoy".to_string(),
             url: "https://staging.webhook.api.mavapay.co/webhook/galoy".to_string(),
             name: "Galoy Staging".to_string(),
             is_active: true,
+            source: Some("galoy".to_string()),
         },
         WebhookEndpoint {
             id: "ibex".to_string(),
             url: "https://staging.webhook.api.mavapay.co/webhook/ibex".to_string(),
             name: "Ibex Staging".to_string(),
             is_active: true,
+            source: Some("ibex".to_string()),
         },
         WebhookEndpoint {
             id: "nomba".to_string(),
             url: "https://staging.webhook.api.mavapay.co/webhook/nomba".to_string(),
             name: "Nomba Staging".to_string(),
             is_active: true,
+            source: Some("nomba".to_string()),
         },
     ];
 
