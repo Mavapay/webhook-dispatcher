@@ -4,7 +4,7 @@
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Webhook Dispatcher</title>
-        <link rel="stylesheet" href="style.css" />
+        <link rel="stylesheet" href="style.css?v=2" />
     </head>
     <body>
         <div class="container">
@@ -23,11 +23,6 @@
                         id="webhookName"
                         placeholder="Enter a name for this endpoint"
                     />
-                    <input
-                        type="text"
-                        id="webhookSource"
-                        placeholder="Enter source (e.g., fincra, splice) or leave empty for all"
-                    />
                     <button onclick="addEndpoint()">Add Endpoint</button>
                 </div>
             </div>
@@ -41,7 +36,7 @@
 
             <div class="webhook-info">
                 <h2>Webhook Information</h2>
-                <p>Send source-specific webhooks to: <code id="webhookUrl"></code></p>
+                <p>Send source-specific webhooks to: <code id="webhookInfoUrl"></code></p>
                 <p>Or target a specific source: <code id="webhookSourceUrl"></code></p>
                 <pre class="code-block">
 # Send to a specific source (recommended):
@@ -51,6 +46,6 @@ curl -X POST https://webhook-origin.com/webhook/fincra \
                 >
             </div>
         </div>
-        <script src="app.js"></script>
+        <script src="app.js?v=2"></script>
     </body>
 </html>

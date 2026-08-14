@@ -1,8 +1,10 @@
 // Update webhook URL in the info section
 function updateWebhookUrl() {
   const serverUrl = window.location.origin;
-  document.getElementById("webhookUrl").textContent = `${serverUrl}/webhook/{source}`;
-  document.getElementById("webhookSourceUrl").textContent = `${serverUrl}/webhook/fincra`;
+  const infoUrl = document.getElementById("webhookInfoUrl");
+  const sourceUrl = document.getElementById("webhookSourceUrl");
+  if (infoUrl) infoUrl.textContent = `${serverUrl}/webhook/{source}`;
+  if (sourceUrl) sourceUrl.textContent = `${serverUrl}/webhook/fincra`;
 }
 
 // Load endpoints from server
@@ -53,10 +55,12 @@ function displayEndpoints(endpoints) {
 async function addEndpoint() {
   const urlInput = document.getElementById("webhookUrl");
   const nameInput = document.getElementById("webhookName");
-  const sourceInput = document.getElementById("webhookSource");
+  if (!urlInput || !nameInput) {
+    showNotification("Form elements not found - please hard refresh (Ctrl+Shift+R)", "error");
+    return;
+  }
   const url = urlInput.value.trim();
   const name = nameInput.value.trim();
-  const source = sourceInput.value.trim();
 
   if (!url || !name) {
     showNotification("Please fill in all fields", "error");
@@ -73,7 +77,6 @@ async function addEndpoint() {
         url,
         name,
         is_active: false,
-        source: source || undefined,
       }),
     });
 
@@ -86,7 +89,6 @@ async function addEndpoint() {
     displayEndpoints(endpoints);
     urlInput.value = "";
     nameInput.value = "";
-    sourceInput.value = "";
     showNotification("Endpoint added successfully", "success");
   } catch (error) {
     console.error("Error adding endpoint:", error);

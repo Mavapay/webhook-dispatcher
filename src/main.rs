@@ -1,7 +1,7 @@
 use actix_cors::Cors;
 use actix_files;
 use actix_web::rt;
-use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use futures::future;
 use log::{info, warn, error, debug};
 use reqwest;
@@ -13,8 +13,22 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 
 fn data_dir() -> PathBuf {
-    let dir = env::var("DATA_DIR").unwrap_or_else(|_| "/data".to_string());
+    let dir = env::var("DATA_DIR").unwrap_or_else(|_| "./data".to_string());
     PathBuf::from(dir)
+}
+
+async fn no_cache<B: actix_web::body::MessageBody>(
+    req: actix_web::dev::ServiceRequest,
+    next: middleware::Next<B>,
+) -> Result<actix_web::dev::ServiceResponse<B>, actix_web::Error> {
+    let mut res = next.call(req).await?;
+    res.headers_mut().insert(
+        actix_web::http::header::CACHE_CONTROL,
+        actix_web::http::header::HeaderValue::from_static(
+            "no-store, no-cache, must-revalidate",
+        ),
+    );
+    Ok(res)
 }
 
 fn endpoints_path() -> PathBuf {
@@ -48,8 +62,6 @@ struct CreateWebhookRequest {
     name: String,
     #[serde(default)]
     is_active: bool,
-    #[serde(default)]
-    source: Option<String>,
 }
 
 struct AppState {
@@ -84,11 +96,7 @@ async fn register_endpoint(
         }));
     }
 
-    let source = endpoint_req
-        .source
-        .as_ref()
-        .filter(|s| !s.trim().is_empty())
-        .cloned();
+    let source = infer_source(&endpoint_req.url, &endpoint_req.name);
 
     let new_endpoint = WebhookEndpoint {
         id: uuid::Uuid::new_v4().to_string(),
@@ -330,24 +338,18 @@ async fn receive_webhook(
     };
 
     let endpoints = data.endpoints.read().unwrap();
-    let active_endpoints: Vec<WebhookEndpoint> = endpoints
-        .iter()
-        .filter(|e| e.is_active && e.source.is_none())
-        .cloned()
-        .collect();
+    let active_endpoints: Vec<WebhookEndpoint> =
+        endpoints.iter().filter(|e| e.is_active).cloned().collect();
 
     if active_endpoints.is_empty() {
-        warn!("No active catch-all endpoints configured for webhook forwarding");
+        warn!("No active endpoints configured for webhook forwarding");
         return HttpResponse::Ok().json(serde_json::json!({
             "status": "no_active_endpoints",
-            "message": "No active catch-all endpoints configured"
+            "message": "No active endpoints configured"
         }));
     }
 
-    info!(
-        "Forwarding webhook to {} catch-all endpoint(s)",
-        active_endpoints.len()
-    );
+    info!("Forwarding webhook to {} active endpoint(s)", active_endpoints.len());
 
     let webhook_event_clone = webhook_event.clone();
 
@@ -391,12 +393,45 @@ async fn receive_webhook(
     }))
 }
 
+// Infer a source from an endpoint URL/name (used to backfill older endpoints)
+fn infer_source(url: &str, name: &str) -> Option<String> {
+    let known_sources = [
+        "fincra",
+        "splice",
+        "useorange",
+        "galoy",
+        "ibex",
+        "nomba",
+    ];
+
+    if let Ok(parsed) = url::Url::parse(url) {
+        if let Some(last_segment) = parsed
+            .path_segments()
+            .and_then(|mut segs| segs.next_back())
+        {
+            let normalized = last_segment.to_lowercase();
+            if known_sources.contains(&normalized.as_str()) {
+                return Some(normalized);
+            }
+        }
+    }
+
+    let haystack = format!("{} {}", url, name).to_lowercase();
+    known_sources
+        .iter()
+        .find(|source| haystack.contains(*source))
+        .map(|s| s.to_string())
+}
+
 // Save endpoints to a JSON file
 fn save_endpoints(endpoints: &[WebhookEndpoint]) -> Result<(), String> {
     let json = serde_json::to_string_pretty(endpoints)
         .map_err(|e| format!("Failed to serialize endpoints: {}", e))?;
 
     let path = endpoints_path();
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("Failed to create data dir: {}", e))?;
+    }
     fs::write(&path, json).map_err(|e| format!("Failed to write endpoints file: {}", e))
 }
 
@@ -406,7 +441,26 @@ fn load_endpoints() -> Vec<WebhookEndpoint> {
     if path.exists() {
         match fs::read_to_string(&path) {
             Ok(contents) => match serde_json::from_str::<Vec<WebhookEndpoint>>(&contents) {
-                Ok(endpoints) => {
+                Ok(mut endpoints) => {
+                    // Backfill source for legacy endpoints that predate the source field.
+                    let mut backfilled = false;
+                    for endpoint in endpoints.iter_mut() {
+                        if endpoint.source.is_none() {
+                            if let Some(source) = infer_source(&endpoint.url, &endpoint.name) {
+                                backfilled = true;
+                                info!(
+                                    "Backfilled source '{}' for endpoint: id={}, name={}",
+                                    source, endpoint.id, endpoint.name
+                                );
+                                endpoint.source = Some(source);
+                            }
+                        }
+                    }
+                    if backfilled {
+                        if let Err(e) = save_endpoints(&endpoints) {
+                            error!("Error saving backfilled endpoints: {}", e);
+                        }
+                    }
                     info!("Loaded {} endpoints from file", endpoints.len());
                     return endpoints;
                 }
@@ -492,6 +546,7 @@ async fn main() -> std::io::Result<()> {
 
         App::new()
             .wrap(cors)
+            .wrap(middleware::from_fn(no_cache))
             .app_data(app_state.clone())
             .route("/webhook", web::post().to(receive_webhook))
             .route(
