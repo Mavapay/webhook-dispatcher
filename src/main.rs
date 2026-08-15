@@ -3,7 +3,7 @@ use actix_files;
 use actix_web::rt;
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use futures::future;
-use log::{info, warn, error, debug};
+use log::{debug, error, info, warn};
 use reqwest;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -24,9 +24,7 @@ async fn no_cache<B: actix_web::body::MessageBody>(
     let mut res = next.call(req).await?;
     res.headers_mut().insert(
         actix_web::http::header::CACHE_CONTROL,
-        actix_web::http::header::HeaderValue::from_static(
-            "no-store, no-cache, must-revalidate",
-        ),
+        actix_web::http::header::HeaderValue::from_static("no-store, no-cache, must-revalidate"),
     );
     Ok(res)
 }
@@ -78,7 +76,10 @@ async fn register_endpoint(
     endpoint_req: web::Json<CreateWebhookRequest>,
     data: web::Data<AppState>,
 ) -> HttpResponse {
-    info!("POST /endpoints - Register endpoint request: name={}, url={}, is_active={}", endpoint_req.name, endpoint_req.url, endpoint_req.is_active);
+    info!(
+        "POST /endpoints - Register endpoint request: name={}, url={}, is_active={}",
+        endpoint_req.name, endpoint_req.url, endpoint_req.is_active
+    );
     debug!("Register endpoint payload: {:?}", endpoint_req);
 
     if let Err(e) = url::Url::parse(&endpoint_req.url) {
@@ -108,7 +109,10 @@ async fn register_endpoint(
 
     let mut endpoints = data.endpoints.write().unwrap();
     endpoints.push(new_endpoint.clone());
-    info!("Registered new endpoint: id={}, name={}, url={}", new_endpoint.id, new_endpoint.name, new_endpoint.url);
+    info!(
+        "Registered new endpoint: id={}, name={}, url={}",
+        new_endpoint.id, new_endpoint.name, new_endpoint.url
+    );
 
     if let Err(e) = save_endpoints(&endpoints) {
         error!("Error saving endpoints: {}", e);
@@ -132,14 +136,20 @@ async fn update_endpoint(
     data: web::Data<AppState>,
 ) -> HttpResponse {
     let id = path.into_inner();
-    info!("PUT /endpoints/{}/status - Update endpoint request: is_active={}", id, update.is_active);
+    info!(
+        "PUT /endpoints/{}/status - Update endpoint request: is_active={}",
+        id, update.is_active
+    );
     debug!("Update payload: {:?}", update);
 
     let mut endpoints = data.endpoints.write().unwrap();
 
     if let Some(endpoint) = endpoints.iter_mut().find(|e| e.id == id) {
         endpoint.is_active = update.is_active;
-        info!("Updated endpoint: id={}, name={}, is_active={}", endpoint.id, endpoint.name, endpoint.is_active);
+        info!(
+            "Updated endpoint: id={}, name={}, is_active={}",
+            endpoint.id, endpoint.name, endpoint.is_active
+        );
 
         let endpoint_clone = endpoint.clone();
 
@@ -184,7 +194,10 @@ async fn forward_webhook(
     endpoint: &WebhookEndpoint,
     payload: &WebhookEvent,
 ) -> Result<(), String> {
-    info!("Forwarding webhook to endpoint: name={}, url={}", endpoint.name, endpoint.url);
+    info!(
+        "Forwarding webhook to endpoint: name={}, url={}",
+        endpoint.name, endpoint.url
+    );
     debug!("Forward payload: {:?}", payload);
 
     let mut request_builder = client.post(&endpoint.url).json(&payload.payload);
@@ -216,14 +229,20 @@ async fn forward_webhook(
 
     let status = response.status();
     if status.is_success() {
-        info!("Successfully forwarded to {}: status {}", endpoint.name, status);
+        info!(
+            "Successfully forwarded to {}: status {}",
+            endpoint.name, status
+        );
         Ok(())
     } else {
         let error_body = response
             .text()
             .await
             .unwrap_or_else(|_| "Unable to read error response".to_string());
-        error!("Endpoint {} returned error status {}: {}", endpoint.name, status, error_body);
+        error!(
+            "Endpoint {} returned error status {}: {}",
+            endpoint.name, status, error_body
+        );
         Err(format!(
             "Endpoint returned error status {}: {}",
             status, error_body
@@ -349,7 +368,10 @@ async fn receive_webhook(
         }));
     }
 
-    info!("Forwarding webhook to {} active endpoint(s)", active_endpoints.len());
+    info!(
+        "Forwarding webhook to {} active endpoint(s)",
+        active_endpoints.len()
+    );
 
     let webhook_event_clone = webhook_event.clone();
 
@@ -402,13 +424,11 @@ fn infer_source(url: &str, name: &str) -> Option<String> {
         "galoy",
         "ibex",
         "nomba",
+        "safehaven",
     ];
 
     if let Ok(parsed) = url::Url::parse(url) {
-        if let Some(last_segment) = parsed
-            .path_segments()
-            .and_then(|mut segs| segs.next_back())
-        {
+        if let Some(last_segment) = parsed.path_segments().and_then(|mut segs| segs.next_back()) {
             let normalized = last_segment.to_lowercase();
             if known_sources.contains(&normalized.as_str()) {
                 return Some(normalized);
@@ -526,8 +546,7 @@ fn load_endpoints() -> Vec<WebhookEndpoint> {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
     let bind_address = format!("0.0.0.0:{}", port);
