@@ -425,6 +425,8 @@ fn infer_source(url: &str, name: &str) -> Option<String> {
         "ibex",
         "nomba",
         "safehaven",
+        "kotani",
+        "otc",
     ];
 
     if let Ok(parsed) = url::Url::parse(url) {
