@@ -457,43 +457,9 @@ fn save_endpoints(endpoints: &[WebhookEndpoint]) -> Result<(), String> {
     fs::write(&path, json).map_err(|e| format!("Failed to write endpoints file: {}", e))
 }
 
-// Load endpoints from a JSON file
-fn load_endpoints() -> Vec<WebhookEndpoint> {
-    let path = endpoints_path();
-    if path.exists() {
-        match fs::read_to_string(&path) {
-            Ok(contents) => match serde_json::from_str::<Vec<WebhookEndpoint>>(&contents) {
-                Ok(mut endpoints) => {
-                    // Backfill source for legacy endpoints that predate the source field.
-                    let mut backfilled = false;
-                    for endpoint in endpoints.iter_mut() {
-                        if endpoint.source.is_none() {
-                            if let Some(source) = infer_source(&endpoint.url, &endpoint.name) {
-                                backfilled = true;
-                                info!(
-                                    "Backfilled source '{}' for endpoint: id={}, name={}",
-                                    source, endpoint.id, endpoint.name
-                                );
-                                endpoint.source = Some(source);
-                            }
-                        }
-                    }
-                    if backfilled {
-                        if let Err(e) = save_endpoints(&endpoints) {
-                            error!("Error saving backfilled endpoints: {}", e);
-                        }
-                    }
-                    info!("Loaded {} endpoints from file", endpoints.len());
-                    return endpoints;
-                }
-                Err(e) => error!("Error parsing endpoints file: {}", e),
-            },
-            Err(e) => error!("Error reading endpoints file: {}", e),
-        }
-    }
-
-    // Return default endpoints with our staging URLs
-    let default_endpoints = vec![
+// Default endpoints, always seeded on startup so every source is wired up
+fn default_endpoints() -> Vec<WebhookEndpoint> {
+    vec![
         WebhookEndpoint {
             id: "fincra".to_string(),
             url: "https://staging.webhook.api.mavapay.co/webhook/fincra".to_string(),
@@ -543,14 +509,63 @@ fn load_endpoints() -> Vec<WebhookEndpoint> {
             is_active: true,
             source: Some("kotani".to_string()),
         },
-    ];
+    ]
+}
 
-    // Save the default endpoints
-    if let Err(e) = save_endpoints(&default_endpoints) {
+// Load endpoints from a JSON file, merging in any missing defaults
+fn load_endpoints() -> Vec<WebhookEndpoint> {
+    let path = endpoints_path();
+    if path.exists() {
+        match fs::read_to_string(&path) {
+            Ok(contents) => match serde_json::from_str::<Vec<WebhookEndpoint>>(&contents) {
+                Ok(mut endpoints) => {
+                    // Backfill source for legacy endpoints that predate the source field.
+                    let mut backfilled = false;
+                    for endpoint in endpoints.iter_mut() {
+                        if endpoint.source.is_none() {
+                            if let Some(source) = infer_source(&endpoint.url, &endpoint.name) {
+                                backfilled = true;
+                                info!(
+                                    "Backfilled source '{}' for endpoint: id={}, name={}",
+                                    source, endpoint.id, endpoint.name
+                                );
+                                endpoint.source = Some(source);
+                            }
+                        }
+                    }
+                    // Seed any defaults missing from the file (e.g. new sources added in code)
+                    let mut seeded = false;
+                    for default in default_endpoints() {
+                        if !endpoints.iter().any(|e| e.id == default.id) {
+                            info!(
+                                "Seeding default endpoint: id={}, name={}",
+                                default.id, default.name
+                            );
+                            endpoints.push(default);
+                            seeded = true;
+                        }
+                    }
+                    if backfilled || seeded {
+                        if let Err(e) = save_endpoints(&endpoints) {
+                            error!("Error saving endpoints: {}", e);
+                        }
+                    }
+                    info!("Loaded {} endpoints from file", endpoints.len());
+                    return endpoints;
+                }
+                Err(e) => error!("Error parsing endpoints file: {}", e),
+            },
+            Err(e) => error!("Error reading endpoints file: {}", e),
+        }
+    }
+
+    let defaults = default_endpoints();
+
+    if let Err(e) = save_endpoints(&defaults) {
         error!("Error saving default endpoints: {}", e);
     }
 
-    default_endpoints
+    defaults
 }
 
 #[actix_web::main]
