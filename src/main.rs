@@ -536,6 +536,13 @@ fn load_endpoints() -> Vec<WebhookEndpoint> {
             is_active: true,
             source: Some("nomba".to_string()),
         },
+        WebhookEndpoint {
+            id: "safehaven".to_string(),
+            url: "https://staging.webhook.api.mavapay.co/webhook/kotani".to_string(),
+            name: "Kotani Staging".to_string(),
+            is_active: true,
+            source: Some("kotani".to_string()),
+        },
     ];
 
     // Save the default endpoints
